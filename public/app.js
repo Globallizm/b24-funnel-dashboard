@@ -180,6 +180,9 @@
         renderChart();
         renderDeals();
         renderUpdated();
+        if (data.truncated) {
+          showError('За выбранный период больше 5000 сделок — показатели посчитаны по первым 5000. Сузьте период.');
+        }
       })
       .catch(function (error) {
         showError(error.code === 'NO_USER_SESSION'
@@ -207,13 +210,19 @@
     });
   }
 
-  /* По умолчанию — с начала текущего месяца по сегодня.
-     В первые дни месяца такой период почти пуст, поэтому берём и предыдущий. */
+  /* По умолчанию — текущий месяц: с первого числа по сегодня.
+     В первые дни месяца такой период почти пуст, поэтому показываем
+     предыдущий месяц целиком — с первого по последнее число. */
   function defaultDates() {
     var now = new Date();
-    var monthsBack = now.getDate() < 5 ? 1 : 0;
-    $('dateFrom').value = iso(new Date(now.getFullYear(), now.getMonth() - monthsBack, 1));
-    $('dateTo').value = iso(now);
+    if (now.getDate() < 5) {
+      $('dateFrom').value = iso(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+      // Нулевой день следующего месяца — это последний день предыдущего.
+      $('dateTo').value = iso(new Date(now.getFullYear(), now.getMonth(), 0));
+    } else {
+      $('dateFrom').value = iso(new Date(now.getFullYear(), now.getMonth(), 1));
+      $('dateTo').value = iso(now);
+    }
   }
 
   function init() {

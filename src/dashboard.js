@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 
 import { config } from './config.js';
-import { list, aggregate, ApiError } from './vibecode.js';
+import { list } from './vibecode.js';
 
 const cache = new Map();
 
@@ -95,11 +95,15 @@ export function loadMeta(sessionToken) {
       }).catch(() => []),
     ]);
 
-    const funnels = [{ id: '0', name: 'Общая воронка' }].concat(
-      categories
-        .map((c) => ({ id: String(pick(c, 'id', 'ID')), name: pick(c, 'name', 'NAME') || 'Без названия' }))
-        .filter((c) => c.id !== '0')
-    );
+    // Названия воронок берём как они заданы на портале, включая общую (id 0).
+    const fromPortal = categories.map((c) => ({
+      id: String(pick(c, 'id', 'ID')),
+      name: pick(c, 'name', 'NAME') || 'Без названия',
+    }));
+    const funnels = fromPortal.some((f) => f.id === '0')
+      ? fromPortal
+      : [{ id: '0', name: 'Общая воронка' }].concat(fromPortal);
+
     const seen = new Set();
     const uniqueFunnels = funnels.filter((f) => (seen.has(f.id) ? false : seen.add(f.id)));
 
@@ -133,50 +137,23 @@ function buildFilter({ categoryId, assignedById, dateFrom, dateTo }) {
   return filter;
 }
 
-/** Сводка по стадиям: количество и сумма. Основной путь — агрегация на стороне API. */
+const SCAN_LIMIT = 5000;
+
+/**
+ * Сводка по стадиям: количество сделок и их сумма.
+ *
+ * Считается по выборке сделок, а не агрегацией на стороне API: в режиме
+ * группировки по стадии платформа возвращает точные количества, но числовые
+ * агрегаты при этом приходят пустыми, и суммы получались нулевыми.
+ */
 async function stageSummary(filter, stages, sessionToken) {
-  try {
-    const groups = await aggregate(
-      'deals',
-      {
-        filter,
-        groupBy: ['stageId'],
-        aggregations: [
-          { function: 'count', alias: 'count' },
-          { function: 'sum', field: 'amount', alias: 'sum' },
-        ],
-      },
-      sessionToken
-    );
-
-    const byStage = new Map();
-    for (const group of groups) {
-      const stageId = String(pick(group, 'stageId', 'STAGE_ID', 'group', 'key') ?? '');
-      byStage.set(stageId, {
-        count: num(pick(group, 'count', 'COUNT', 'cnt')),
-        sum: num(pick(group, 'sum', 'SUM', 'amountSum', 'sumAmount')),
-      });
-    }
-    // Стадии без сделок в ответе не приходят — дополняем нулями.
-    return stages.map((stage) => ({
-      ...stage,
-      count: byStage.get(stage.id)?.count ?? 0,
-      sum: byStage.get(stage.id)?.sum ?? 0,
-    }));
-  } catch (error) {
-    if (error instanceof ApiError && error.status >= 500) throw error;
-    // Запасной путь: считаем на своей стороне.
-    return stageSummaryFallback(filter, stages, sessionToken);
-  }
-}
-
-async function stageSummaryFallback(filter, stages, sessionToken) {
   const deals = await list('deals', {
     filter,
     select: ['id', 'stageId', 'amount', 'opportunity'],
-    limit: 5000,
+    limit: SCAN_LIMIT,
     sessionToken,
   });
+
   const byStage = new Map();
   for (const deal of deals) {
     const stageId = String(pick(deal, 'stageId', 'STAGE_ID') ?? '');
@@ -185,11 +162,17 @@ async function stageSummaryFallback(filter, stages, sessionToken) {
     entry.sum += num(pick(deal, 'amount', 'opportunity', 'OPPORTUNITY'));
     byStage.set(stageId, entry);
   }
-  return stages.map((stage) => ({
-    ...stage,
-    count: byStage.get(stage.id)?.count ?? 0,
-    sum: byStage.get(stage.id)?.sum ?? 0,
-  }));
+
+  // Стадии без сделок в выборке не встречаются — дополняем нулями.
+  return {
+    // Выборка упёрлась в предел: цифры неполные, интерфейс об этом предупредит.
+    truncated: deals.length >= SCAN_LIMIT,
+    stages: stages.map((stage) => ({
+      ...stage,
+      count: byStage.get(stage.id)?.count ?? 0,
+      sum: byStage.get(stage.id)?.sum ?? 0,
+    })),
+  };
 }
 
 /** Последние созданные сделки. */
@@ -218,11 +201,12 @@ export async function loadDashboard(params, sessionToken) {
       ? meta.stages
       : meta.stages.filter((s) => s.categoryId === categoryId);
 
-    const [summary, deals] = await Promise.all([
+    const [summaryResult, deals] = await Promise.all([
       stageSummary(filter, stages, sessionToken),
       recentDeals(filter, sessionToken),
     ]);
 
+    const summary = summaryResult.stages;
     const inProgress = summary.filter((s) => s.kind === 'progress');
     const won = summary.filter((s) => s.kind === 'success');
 
@@ -235,6 +219,7 @@ export async function loadDashboard(params, sessionToken) {
     return {
       updatedAt: new Date().toISOString(),
       currency: config.currency,
+      truncated: summaryResult.truncated,
       kpi: {
         openAmount: inProgress.reduce((total, s) => total + s.sum, 0),
         wonCount,
