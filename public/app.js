@@ -54,9 +54,7 @@
 
   function renderChart() {
     var chart = $('chart');
-    var labels = $('labels');
     chart.innerHTML = '';
-    labels.innerHTML = '';
 
     var stages = (state.data && state.data.stages) || [];
     if (!stages.length) {
@@ -69,26 +67,32 @@
 
     stages.forEach(function (stage, index) {
       var value = values[index];
+      var shown = state.mode === 'sum' ? money(value) : count(value);
+
       var column = document.createElement('div');
       column.className = 'col';
       column.style.setProperty('--c', COLORS[stage.kind] || COLORS.progress);
+      column.title = stage.name + ': ' + (state.mode === 'sum' ? shown : shown + ' сделок');
 
       var label = document.createElement('div');
       label.className = 'v';
-      label.textContent = state.mode === 'sum' ? money(value) : count(value);
+      label.textContent = shown;
 
+      var box = document.createElement('div');
+      box.className = 'barbox';
       var bar = document.createElement('div');
       bar.className = 'b';
-      bar.style.height = Math.max(6, Math.round((value / max) * 190)) + 'px';
-      bar.title = stage.name + ': ' + (state.mode === 'sum' ? money(value) : count(value) + ' сделок');
-
-      column.appendChild(label);
-      column.appendChild(bar);
-      chart.appendChild(column);
+      bar.style.height = Math.max(4, Math.round((value / max) * 190)) + 'px';
+      box.appendChild(bar);
 
       var caption = document.createElement('div');
+      caption.className = 'cap';
       caption.textContent = stage.name;
-      labels.appendChild(caption);
+
+      column.appendChild(label);
+      column.appendChild(box);
+      column.appendChild(caption);
+      chart.appendChild(column);
     });
   }
 
