@@ -30,8 +30,13 @@
   function count(value) {
     return Number(value).toLocaleString('ru-RU');
   }
+  /* Дата в формате ГГГГ-ММ-ДД по местному времени.
+     toISOString() переводит в UTC и в часовых поясах восточнее Гринвича
+     сдвигает начало месяца на сутки назад. */
   function iso(date) {
-    return date.toISOString().slice(0, 10);
+    var m = date.getMonth() + 1;
+    var d = date.getDate();
+    return date.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
   }
   function text(node, value) {
     node.textContent = value;
@@ -202,9 +207,12 @@
     });
   }
 
+  /* По умолчанию — с начала текущего месяца по сегодня.
+     В первые дни месяца такой период почти пуст, поэтому берём и предыдущий. */
   function defaultDates() {
     var now = new Date();
-    $('dateFrom').value = iso(new Date(now.getFullYear(), now.getMonth(), 1));
+    var monthsBack = now.getDate() < 5 ? 1 : 0;
+    $('dateFrom').value = iso(new Date(now.getFullYear(), now.getMonth() - monthsBack, 1));
     $('dateTo').value = iso(now);
   }
 

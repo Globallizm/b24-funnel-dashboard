@@ -55,21 +55,38 @@ function stageKind(stage) {
   return 'progress';
 }
 
-/** Стадии дополнительных воронок имеют префикс вида "C1:". */
-function stageCategoryId(stage) {
-  const explicit = pick(stage, 'categoryId', 'entityCategoryId');
-  if (explicit !== undefined) return String(explicit);
-  const id = String(pick(stage, 'statusId', 'stageId', 'id') || '');
-  const match = /^C(\d+):/.exec(id);
-  return match ? match[1] : '0';
+/**
+ * Справочник стадий одной воронки.
+ *
+ * Идентификаторы стадий в дополнительных воронках имеют префикс ("C20:WON"),
+ * и число в префиксе не обязано совпадать с идентификатором воронки. Поэтому
+ * принадлежность стадии не вычисляется из её кода, а запрашивается у портала:
+ * общая воронка — entityId "DEAL_STAGE", остальные — "DEAL_STAGE_<id воронки>".
+ */
+async function stagesOfFunnel(funnelId, sessionToken) {
+  const entityId = funnelId === '0' ? 'DEAL_STAGE' : `DEAL_STAGE_${funnelId}`;
+  const statuses = await list('statuses', {
+    filter: { entityId },
+    limit: 500,
+    sessionToken,
+  }).catch(() => []);
+
+  return statuses
+    .map((s) => ({
+      id: String(pick(s, 'statusId', 'stageId', 'id')),
+      name: pick(s, 'name', 'NAME') || String(pick(s, 'statusId', 'id')),
+      sort: num(pick(s, 'sort', 'SORT')),
+      categoryId: funnelId,
+      kind: stageKind(s),
+    }))
+    .sort((a, b) => a.sort - b.sort);
 }
 
 /** Справочники: воронки, стадии, сотрудники. Кэшируются на несколько минут. */
 export function loadMeta(sessionToken) {
   return cached(`meta:${scope(sessionToken)}`, config.metaCacheTtl, async () => {
-    const [categories, statuses, users] = await Promise.all([
+    const [categories, users] = await Promise.all([
       list('deal-categories', { limit: 200, sessionToken }).catch(() => []),
-      list('statuses', { filter: { entityId: 'DEAL_STAGE' }, limit: 500, sessionToken }),
       list('users', {
         filter: { active: true },
         select: ['id', 'name', 'lastName', 'secondName', 'title'],
@@ -83,19 +100,14 @@ export function loadMeta(sessionToken) {
         .map((c) => ({ id: String(pick(c, 'id', 'ID')), name: pick(c, 'name', 'NAME') || 'Без названия' }))
         .filter((c) => c.id !== '0')
     );
-    // Если у портала воронка ровно одна, дубликат "Общая" убираем.
     const seen = new Set();
     const uniqueFunnels = funnels.filter((f) => (seen.has(f.id) ? false : seen.add(f.id)));
 
-    const stages = statuses
-      .map((s) => ({
-        id: String(pick(s, 'statusId', 'stageId', 'id')),
-        name: pick(s, 'name', 'NAME') || String(pick(s, 'statusId', 'id')),
-        sort: num(pick(s, 'sort', 'SORT')),
-        categoryId: stageCategoryId(s),
-        kind: stageKind(s),
-      }))
-      .sort((a, b) => a.sort - b.sort);
+    // Стадии каждой воронки — отдельным запросом, параллельно.
+    const perFunnel = await Promise.all(
+      uniqueFunnels.map((f) => stagesOfFunnel(f.id, sessionToken))
+    );
+    const stages = perFunnel.flat();
 
     const people = users
       .map((u) => ({
