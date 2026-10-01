@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Дашборд воронки продаж</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="top">
+  <h1>Дашборд воронки продаж</h1>
+  <span class="updated" id="updated"></span>
+</div>
+
+<section class="card filters">
+  <div class="f dates">
+    <label for="dateFrom">Даты</label>
+    <div class="pair">
+      <input id="dateFrom" type="date">
+      <span>—</span>
+      <input id="dateTo" type="date">
+    </div>
+  </div>
+  <div class="f">
+    <label for="categoryId">Воронка</label>
+    <select id="categoryId"><option value="">Загрузка…</option></select>
+  </div>
+  <div class="f">
+    <label for="assignedById">Ответственный</label>
+    <select id="assignedById"><option value="">Все ответственные</option></select>
+  </div>
+  <button id="apply" type="button">Применить</button>
+  <button id="reset" class="ghost" type="button">Сброс</button>
+</section>
+
+<div class="alert" id="alert" hidden></div>
+
+<section class="kpis">
+  <div class="card kpi c-blue"><div class="lbl">Сумма сделок в работе</div><div class="val" id="kpiOpen">—</div></div>
+  <div class="card kpi c-green"><div class="lbl">Количество выигранных сделок</div><div class="val" id="kpiWon">—</div></div>
+  <div class="card kpi c-orange"><div class="lbl">Средний чек по выигранным сделкам</div><div class="val" id="kpiAvg">—</div></div>
+</section>
+
+<section class="card">
+  <div class="chead">
+    <h2>Сводка по стадиям воронки</h2>
+    <div class="toggle" role="group" aria-label="Режим показателя">
+      <button id="modeCount" type="button" aria-pressed="true">Кол-во</button>
+      <button id="modeSum" type="button" aria-pressed="false">Сумма</button>
+    </div>
+  </div>
+  <div class="chart" id="chart"></div>
+  <div class="labels" id="labels"></div>
+</section>
+
+<section class="card tcard">
+  <div class="thead"><h2>Последние сделки</h2><span id="dealsHint"></span></div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th class="l">Название</th><th>Стадия</th><th>Ответственный</th><th>Сумма</th></tr></thead>
+      <tbody id="dealsBody"></tbody>
+      <tfoot><tr><td class="l">Итого</td><td></td><td></td><td class="n" id="dealsTotal">—</td></tr></tfoot>
+    </table>
+  </div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
