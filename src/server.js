@@ -69,20 +69,29 @@ function readBody(request, limit = 64 * 1024) {
   });
 }
 
+const bearer = (value) =>
+  typeof value === 'string' && value.toLowerCase().startsWith('bearer ')
+    ? value.slice(7).trim()
+    : undefined;
+
 /**
  * Токен сессии текущего сотрудника.
- * Основной источник — httpOnly-cookie, выданная при открытии места встраивания.
- * Заголовок Authorization принимается для локальной отладки и проверки.
+ *
+ * Основной источник — заголовок X-Vibe-Authorization: его подставляет Gateway
+ * платформы на каждый запрос к приложению, открытому внутри портала. Сам токен
+ * при этом не виден JavaScript страницы.
+ *
+ * Запасные источники: httpOnly-cookie (если портал открыл место встраивания
+ * POST-запросом с AUTH_ID) и обычный Authorization — для локальной проверки.
  */
 function sessionTokenFrom(request) {
+  const injected = bearer(request.headers['x-vibe-authorization']);
+  if (injected) return injected;
+
   const session = getSession(sessionIdFromCookies(request.headers.cookie));
   if (session) return session.token;
 
-  const header = request.headers['authorization'];
-  if (typeof header === 'string' && header.toLowerCase().startsWith('bearer ')) {
-    return header.slice(7).trim();
-  }
-  return undefined;
+  return bearer(request.headers['authorization']);
 }
 
 /**
