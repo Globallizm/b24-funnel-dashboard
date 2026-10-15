@@ -24,10 +24,13 @@
     });
   }
 
+  /* null — значение недоступно (например, превышен лимит агрегации). */
   function money(value) {
+    if (value === null || value === undefined) return '—';
     return Math.round(value).toLocaleString('ru-RU') + ' ' + state.currency;
   }
   function count(value) {
+    if (value === null || value === undefined) return '—';
     return Number(value).toLocaleString('ru-RU');
   }
   /* Дата в формате ГГГГ-ММ-ДД по местному времени.
@@ -41,10 +44,12 @@
   function text(node, value) {
     node.textContent = value;
   }
-  function showError(message) {
+  /* Ошибка (красная плашка) или предупреждение о неполных данных (жёлтая). */
+  function showError(message, kind) {
     var box = $('alert');
     if (!message) { box.hidden = true; return; }
     box.hidden = false;
+    box.className = kind === 'warn' ? 'alert warn' : 'alert';
     text(box, message);
   }
 
@@ -57,6 +62,10 @@
     chart.innerHTML = '';
 
     var stages = (state.data && state.data.stages) || [];
+    if (state.data && state.data.limitExceeded) {
+      chart.innerHTML = '<div class="empty">Разбивка по стадиям недоступна: сделок за период больше лимита агрегации</div>';
+      return;
+    }
     if (!stages.length) {
       chart.innerHTML = '<div class="empty">По выбранным фильтрам стадий не найдено</div>';
       return;
@@ -184,8 +193,12 @@
         renderChart();
         renderDeals();
         renderUpdated();
-        if (data.truncated) {
-          showError('За выбранный период больше 5000 сделок — показатели посчитаны по первым 5000. Сузьте период.');
+        if (data.limitExceeded) {
+          showError('За выбранный период ' + count(data.total) + ' сделок — это больше лимита агрегации платформы (5000). ' +
+            'Разбивка по стадиям и суммы недоступны. Сузьте период или выберите одну воронку.', 'warn');
+        } else if (data.truncated) {
+          showError('Суммы посчитаны по части сделок: платформа ограничивает расчёт 5000 записями. ' +
+            'Для точных цифр сузьте период или выберите одну воронку.', 'warn');
         }
       })
       .catch(function (error) {

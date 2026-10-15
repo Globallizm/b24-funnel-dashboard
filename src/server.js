@@ -109,10 +109,31 @@ function requireUserSession(sessionToken) {
   }
 }
 
-const server = createServer(async (request, response) => {
-  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-
+/**
+ * Разбор адреса запроса. Возвращает null для адреса, который не разбирается.
+ *
+ * База фиксированная: заголовок Host присылает клиент, и подставлять его
+ * в разбор — значит дать клиенту второй способ сломать URL.
+ * Пример битого адреса: "GET //" — new URL('//', base) бросает ERR_INVALID_URL.
+ */
+function parseRequestUrl(rawUrl) {
   try {
+    return new URL(rawUrl, 'http://localhost');
+  } catch {
+    return null;
+  }
+}
+
+async function handle(request, response) {
+  try {
+    const url = parseRequestUrl(request.url);
+    if (!url) {
+      return sendJson(response, 400, {
+        success: false,
+        error: { code: 'BAD_REQUEST', message: 'Некорректный адрес запроса' },
+      });
+    }
+
     // Портал открывает место встраивания POST-запросом с параметрами авторизации.
     if (request.method === 'POST' && (url.pathname === '/' || url.pathname === '/index.html')) {
       const body = new URLSearchParams(await readBody(request));
@@ -191,6 +212,38 @@ const server = createServer(async (request, response) => {
       },
     });
   }
+}
+
+/**
+ * Последний рубеж: обработчик асинхронный, и любое исключение, вылетевшее
+ * мимо его try (в том числе из отправки ответа об ошибке), стало бы
+ * необработанным отказом промиса — а он в Node.js завершает процесс.
+ * Здесь такой отказ гасится: запрос получает 500 или закрывается.
+ */
+function lastResort(response) {
+  return (error) => {
+    console.error('[dashboard] необработанная ошибка запроса:', error?.message || error);
+    try {
+      if (!response.headersSent) {
+        response.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ success: false, error: { code: 'INTERNAL', message: 'Внутренняя ошибка приложения' } }));
+      } else {
+        response.destroy();
+      }
+    } catch {
+      response.destroy();
+    }
+  };
+}
+
+const server = createServer((request, response) => {
+  handle(request, response).catch(lastResort(response));
+});
+
+// Битые заголовки и обрывы соединения не должны валить процесс.
+server.on('clientError', (error, socket) => {
+  if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+  else socket.destroy();
 });
 
 server.listen(config.port, () => {

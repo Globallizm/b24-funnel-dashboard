@@ -101,12 +101,18 @@ export async function list(entity, { filter, select, order, limit, sessionToken 
   return Array.isArray(result.data) ? result.data : (result.data?.items ?? []);
 }
 
-/** Агрегация: группировка и подсчёт без выгрузки записей. */
+/**
+ * Агрегация на стороне API: POST /v1/{entity}/aggregate.
+ *
+ * Возвращает data целиком — вместе с groups[] и meta (truncated, totalRecords),
+ * потому что вызывающему коду нужно видеть, полный ли ответ.
+ *
+ * Тело: { filter, groupBy: [...], aggregate: [{ field, function }] }.
+ * Ответ: data.count, data.aggregates.<field>.<fn>,
+ *        data.groups[] = { <поле группировки>, count, aggregates.<field>.<fn>, truncated? },
+ *        data.meta = { totalRecords, recordsProcessed, truncated, aggregatePath? }.
+ */
 export async function aggregate(entity, body, sessionToken) {
   const result = await apiFetch(`/v1/${entity}/aggregate`, { method: 'POST', body, sessionToken });
-  const data = result.data;
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.groups)) return data.groups;
-  if (Array.isArray(data?.items)) return data.items;
-  return [];
+  return result.data ?? {};
 }

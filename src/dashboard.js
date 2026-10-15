@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 
 import { config } from './config.js';
-import { list } from './vibecode.js';
+import { list, aggregate, ApiError } from './vibecode.js';
 
 const cache = new Map();
 
@@ -137,42 +137,88 @@ function buildFilter({ categoryId, assignedById, dateFrom, dateTo }) {
   return filter;
 }
 
-const SCAN_LIMIT = 5000;
-
 /**
- * Сводка по стадиям: количество сделок и их сумма.
+ * Сводка по стадиям: количество сделок и сумма по каждой stageId.
  *
- * Считается по выборке сделок, а не агрегацией на стороне API: в режиме
- * группировки по стадии платформа возвращает точные количества, но числовые
- * агрегаты при этом приходят пустыми, и суммы получались нулевыми.
+ * Один запрос POST /v1/deals/aggregate с группировкой по stageId:
+ *   количество — groups[].count,
+ *   сумма      — groups[].aggregates.amount.sum.
+ * Записи сделок при этом не выгружаются.
+ *
+ * Полнота ответа:
+ * - data.meta.truncated === true — числовые агрегаты посчитаны по части записей
+ *   (платформа читает не больше 5000). Проверяется ЗНАЧЕНИЕ поля: оно приходит
+ *   всегда и в полном ответе равно false. Дополнительно смотрим метки truncated
+ *   на группах и на самом агрегате.
+ * - 422 AGGREGATION_LIMIT_EXCEEDED — сделок под фильтр больше 5000 и группировку
+ *   платформа не строит вовсе. Тогда берём точное общее количество запросом
+ *   count без groupBy (он не читает записи и работает на любом объёме),
+ *   а разбивку по стадиям и суммы помечаем недоступными.
  */
 async function stageSummary(filter, stages, sessionToken) {
-  const deals = await list('deals', {
-    filter,
-    select: ['id', 'stageId', 'amount', 'opportunity'],
-    limit: SCAN_LIMIT,
-    sessionToken,
-  });
-
-  const byStage = new Map();
-  for (const deal of deals) {
-    const stageId = String(pick(deal, 'stageId', 'STAGE_ID') ?? '');
-    const entry = byStage.get(stageId) || { count: 0, sum: 0 };
-    entry.count += 1;
-    entry.sum += num(pick(deal, 'amount', 'opportunity', 'OPPORTUNITY'));
-    byStage.set(stageId, entry);
+  let data;
+  try {
+    data = await aggregate(
+      'deals',
+      {
+        filter,
+        groupBy: ['stageId'],
+        aggregate: [
+          { field: '*', function: 'count' },
+          { field: 'amount', function: 'sum' },
+        ],
+      },
+      sessionToken
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'AGGREGATION_LIMIT_EXCEEDED') {
+      const total = await countOnly(filter, sessionToken);
+      return {
+        limitExceeded: true,
+        truncated: false,
+        total,
+        stages: stages.map((stage) => ({ ...stage, count: null, sum: null })),
+      };
+    }
+    throw error;
   }
 
-  // Стадии без сделок в выборке не встречаются — дополняем нулями.
+  const groups = Array.isArray(data.groups) ? data.groups : [];
+  const byStage = new Map();
+  let groupTruncated = false;
+
+  for (const group of groups) {
+    const stageId = String(pick(group, 'stageId', 'STAGE_ID') ?? '');
+    const amount = group.aggregates?.amount;
+    if (group.truncated === true || amount?.truncated === true) groupTruncated = true;
+    byStage.set(stageId, {
+      count: num(group.count),
+      sum: num(amount?.sum),
+    });
+  }
+
   return {
-    // Выборка упёрлась в предел: цифры неполные, интерфейс об этом предупредит.
-    truncated: deals.length >= SCAN_LIMIT,
+    limitExceeded: false,
+    truncated: data.meta?.truncated === true || groupTruncated,
+    total: num(data.count),
+    // Стадии без сделок в groups не приходят — достраиваем нулями
+    // из полного списка стадий, чтобы воронка читалась целиком.
     stages: stages.map((stage) => ({
       ...stage,
       count: byStage.get(stage.id)?.count ?? 0,
       sum: byStage.get(stage.id)?.sum ?? 0,
     })),
   };
+}
+
+/** Точное количество сделок под фильтр: count без groupBy не читает записи. */
+async function countOnly(filter, sessionToken) {
+  const data = await aggregate(
+    'deals',
+    { filter, aggregate: [{ field: '*', function: 'count' }] },
+    sessionToken
+  );
+  return num(data.count);
 }
 
 /** Последние созданные сделки. */
@@ -207,24 +253,31 @@ export async function loadDashboard(params, sessionToken) {
     ]);
 
     const summary = summaryResult.stages;
-    const inProgress = summary.filter((s) => s.kind === 'progress');
-    const won = summary.filter((s) => s.kind === 'success');
-
-    const wonCount = won.reduce((total, s) => total + s.count, 0);
-    const wonSum = won.reduce((total, s) => total + s.sum, 0);
-
     const userNames = new Map(meta.users.map((u) => [u.id, u.name]));
     const stageNames = new Map(meta.stages.map((s) => [s.id, s]));
+
+    // Показатели выводятся из тех же групп агрегации, что и диаграмма.
+    // При превышении лимита агрегации разбивки нет — показатели не считаем.
+    let kpi = { openAmount: null, wonCount: null, avgWonAmount: null };
+    if (!summaryResult.limitExceeded) {
+      const inProgress = summary.filter((s) => s.kind === 'progress');
+      const won = summary.filter((s) => s.kind === 'success');
+      const wonCount = won.reduce((total, s) => total + s.count, 0);
+      const wonSum = won.reduce((total, s) => total + s.sum, 0);
+      kpi = {
+        openAmount: inProgress.reduce((total, s) => total + s.sum, 0),
+        wonCount,
+        avgWonAmount: wonCount > 0 ? Math.round(wonSum / wonCount) : 0,
+      };
+    }
 
     return {
       updatedAt: new Date().toISOString(),
       currency: config.currency,
       truncated: summaryResult.truncated,
-      kpi: {
-        openAmount: inProgress.reduce((total, s) => total + s.sum, 0),
-        wonCount,
-        avgWonAmount: wonCount > 0 ? Math.round(wonSum / wonCount) : 0,
-      },
+      limitExceeded: summaryResult.limitExceeded,
+      total: summaryResult.total,
+      kpi,
       stages: summary.map((s) => ({ id: s.id, name: s.name, kind: s.kind, count: s.count, sum: s.sum })),
       deals: deals.map((deal) => {
         const stageId = String(pick(deal, 'stageId', 'STAGE_ID') ?? '');

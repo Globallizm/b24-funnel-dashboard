@@ -30,6 +30,7 @@ button.ghost{background:transparent;color:var(--muted);border:1px solid var(--li
 button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 button[disabled]{opacity:.6;cursor:progress}
 
+.alert.warn{background:#fff6e0;color:#7a5200;border-color:#f1dca6}
 .alert{background:#fdeaea;color:#8d2630;border:1px solid #f3c6ca;border-radius:10px;
   padding:12px 16px;margin-bottom:16px;font-size:.88rem}
 
@@ -85,4 +86,5 @@ tfoot td{border-top:2px solid var(--line);background:var(--head);font-weight:700
     --head:#1e2733; --shadow:0 1px 3px rgba(0,0,0,.4); color-scheme:dark;
   }
   .alert{background:#3a1f22;color:#f0a8ae;border-color:#5c2c31}
+  .alert.warn{background:#3a3012;color:#e8c46a;border-color:#5c4b1c}
 }
